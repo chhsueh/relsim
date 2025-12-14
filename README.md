@@ -251,7 +251,7 @@ You can also see the **uncurated 1000 retrieved results** live at [🔍 Image Re
 # 📊 Similarity Space Figure
 
 You might not believe it, but yes, we spent months+++ figuring out how to plot this theorical **Similarity Space** (Figure 7 in main paper).  
-So I won't let that effort go to waste! Code for the figures in this paper is available in [./plot_figure/](./plot_figure/).
+Code for the figures in this paper is available in [./plot_figure/](./plot_figure/) (This is the code to show plot figure similar to below).
 
 <table>
   <tr>
