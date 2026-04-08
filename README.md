@@ -1,4 +1,4 @@
-# <img src="https://thaoshibe.github.io/relsim/images/favicon.png" height=35px> [Relational Visual Similarity](https://thaoshibe.github.io/relsim/)
+# <img src="https://thaoshibe.github.io/relsim/images/favicon.png" height=35px> [Relational Visual Similarity](https://thaoshibe.github.io/relsim/) (CVPR 2026)
 
 <p align="left">
   <a href="https://arxiv.org/abs/2512.07833"><img src="https://img.shields.io/badge/arXiv-Paper-b31b1b?logo=arxiv&logoColor=white" alt="arXiv"></a>
