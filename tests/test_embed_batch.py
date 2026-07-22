@@ -16,7 +16,16 @@ downloading the 7B checkpoint. The final test does a real single-vs-batch
 numerical parity check; it runs on CPU or CUDA and is skipped only when no
 checkpoint is available (set RELSIM_CHECKPOINT_DIR to enable it).
 
-to run the test: `python -m pytest tests/ -v`
+How to run:
+
+    # mocked/backward-compat tests only (no checkpoint, CPU, fast):
+    python -m pytest tests/ -v
+
+    # download from HF and run the parity test:
+    RELSIM_CHECKPOINT_DIR=thaoshibe/relsim-qwenvl25-lora python -m pytest tests/ -v -k parity
+
+    # or use a local checkpoint you already have:
+    RELSIM_CHECKPOINT_DIR=/path/to/relsim_checkpoints python -m pytest tests/ -v -k parity
 """
 import os
 import types
@@ -299,16 +308,25 @@ def test_embed_real_images_order_matches_individual(model, real_images):
 # --------------------------------------------------------------------------- #
 # Real-model parity (skipped unless a checkpoint + CUDA are available)
 # --------------------------------------------------------------------------- #
+# Which checkpoint the real parity test uses:
+#   * RELSIM_CHECKPOINT_DIR set  -> that local path or HF id
+#   * RELSIM_RUN_REAL=1          -> download the public model from HF
+#   * neither                    -> skip (keeps CI light; ~18 GB download otherwise)
+_REAL_CKPT = os.environ.get("RELSIM_CHECKPOINT_DIR") or (
+    "thaoshibe/relsim-qwenvl25-lora" if os.environ.get("RELSIM_RUN_REAL") else None
+)
+
+
 @requires_images
 @pytest.mark.skipif(
-    not os.environ.get("RELSIM_CHECKPOINT_DIR"),
-    reason="requires RELSIM_CHECKPOINT_DIR (runs on CPU or CUDA)",
+    _REAL_CKPT is None,
+    reason="set RELSIM_CHECKPOINT_DIR (local path or HF id), or RELSIM_RUN_REAL=1 "
+           "to download from HF; runs on CPU or CUDA",
 )
 def test_real_single_vs_batch_parity():
     from relsim.relsim_score import relsim as load_relsim
 
-    ckpt = os.environ["RELSIM_CHECKPOINT_DIR"]
-    m, preprocess = load_relsim(pretrained=True, checkpoint_dir=ckpt)
+    m, preprocess = load_relsim(pretrained=True, checkpoint_dir=_REAL_CKPT)
 
     imgs = preprocess([Image.open(p) for p in IMAGE_PATHS])
     batched = m.embed(imgs)
