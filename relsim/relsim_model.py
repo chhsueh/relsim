@@ -41,13 +41,28 @@ class QwenWithQueryToken(nn.Module):
         except StopIteration:
             pass  # Model has no parameters, leave projection on CPU/float32
         
-    def forward(self, input_ids, attention_mask, pixel_values=None, image_grid_thw=None):
+    def forward(self, input_ids, attention_mask, pixel_values=None, image_grid_thw=None,
+                pixel_values_videos=None, video_grid_thw=None, second_per_grid_ts=None):
         """
         Forward pass that:
         1. Processes input through Qwen (query token is already in input_ids)
         2. Finds the position of query token
         3. Extracts feature from query token position
+
+        Video inputs (``pixel_values_videos``, ``video_grid_thw``,
+        ``second_per_grid_ts``) are passed through to Qwen2.5-VL unchanged so the
+        same query-token readout works for clips. Note the released LoRA was
+        trained on images only, so video embeddings are zero-shot.
         """
+        # Only forward video kwargs when present, so image-only calls are unchanged.
+        video_kwargs = {}
+        if pixel_values_videos is not None:
+            video_kwargs = dict(
+                pixel_values_videos=pixel_values_videos,
+                video_grid_thw=video_grid_thw,
+                second_per_grid_ts=second_per_grid_ts,
+            )
+
         # Get outputs from base model with output_hidden_states
         outputs = self.base_model.model(
             input_ids=input_ids,
@@ -56,6 +71,7 @@ class QwenWithQueryToken(nn.Module):
             image_grid_thw=image_grid_thw,
             output_hidden_states=True,
             return_dict=True,
+            **video_kwargs,
         )
         
         # Get last hidden state: [batch_size, seq_len, hidden_size]

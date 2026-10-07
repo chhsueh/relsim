@@ -3,7 +3,7 @@ import torch.nn.functional as F
 import os
 from transformers import AutoProcessor, Qwen2_5_VLForConditionalGeneration
 from peft import PeftModel
-from qwen_vl_utils import process_vision_info
+from qwen_vl_utils import process_vision_info, fetch_video
 from PIL import Image
 from huggingface_hub import hf_hub_download
 
@@ -105,7 +105,120 @@ class relsim:
             embeddings = F.normalize(embeddings, dim=-1)
 
         return embeddings
-    
+
+    # ------------------------------------------------------------------ video
+    @staticmethod
+    def _as_video_list(videos):
+        """Normalize input to a list of videos.
+
+        A single video is a path/URL string or a list of PIL frames; anything
+        else is treated as a list of such videos.
+        """
+        if isinstance(videos, str):
+            return [videos]
+        if isinstance(videos, (list, tuple)) and videos and all(
+            isinstance(f, Image.Image) for f in videos
+        ):
+            return [list(videos)]
+        if isinstance(videos, (list, tuple)):
+            return list(videos)
+        raise TypeError("videos must be a path, a list of PIL frames, or a list of those")
+
+    @staticmethod
+    def _sample_frames(video, nframes):
+        """Return ``nframes`` uniformly sampled RGB PIL frames from a video."""
+        if isinstance(video, str):
+            frames = fetch_video({"video": video, "nframes": nframes})  # [T, C, H, W]
+            return [
+                Image.fromarray(f.clamp(0, 255).to(torch.uint8).permute(1, 2, 0).cpu().numpy())
+                for f in frames
+            ]
+        if not video or not all(isinstance(f, Image.Image) for f in video):
+            raise TypeError("Each video must be a path or a non-empty list of PIL Images")
+        idx = torch.linspace(0, len(video) - 1, min(nframes, len(video))).round().long().tolist()
+        return [video[i].convert("RGB") for i in idx]
+
+    def embed_video(self, videos, mode="frames", nframes=8, fps=None,
+                    max_pixels=None, max_image_size=None, micro_batch_size=None):
+        """
+        Extract RelSim embedding(s) for one video or a list of videos -> ``[N, 384]``.
+
+        Args:
+            videos: A video path/URL, a list of PIL frames (one video), or a list
+                of either.
+            mode: ``"frames"`` (default) embeds ``nframes`` uniformly sampled
+                frames as images and mean-pools them. This stays within the
+                image distribution the model was trained on, but ignores
+                temporal order. ``"native"`` feeds the clip to Qwen2.5-VL as a
+                video and reads the ``<|query|>`` token, so it can see motion.
+                It is zero-shot: the released LoRA never saw video tokens.
+            nframes: Frames sampled per video (rounded to an even number in
+                native mode, as Qwen requires).
+            fps: Native mode only. Sample at this rate instead of ``nframes``.
+            max_pixels: Native mode only. Per-frame pixel budget, e.g.
+                ``360 * 420``. Lower it for long clips to avoid OOM, but keep
+                it at or above qwen_vl_utils' video minimum (128 * 28 * 28).
+            max_image_size: Frames mode only. Same as in ``embed``.
+            micro_batch_size: Frames mode: frames per forward pass. Native
+                mode: videos per forward pass.
+
+        Returns:
+            L2-normalized tensor of shape ``[N, 384]``, comparable with image
+            embeddings from ``embed`` by dot product.
+        """
+        vids = self._as_video_list(videos)
+        if mode == "frames":
+            frame_lists = [self._sample_frames(v, nframes) for v in vids]
+            flat = [f for frames in frame_lists for f in frames]
+            per_frame = self.embed(flat, max_image_size=max_image_size,
+                                   micro_batch_size=micro_batch_size)
+            pooled, start = [], 0
+            for frames in frame_lists:
+                pooled.append(per_frame[start:start + len(frames)].mean(dim=0))
+                start += len(frames)
+            return F.normalize(torch.stack(pooled, dim=0), dim=-1)
+        if mode == "native":
+            step = micro_batch_size if micro_batch_size and micro_batch_size > 0 else len(vids)
+            return torch.cat([
+                self._embed_video_batch(vids[i:i + step], nframes, fps, max_pixels)
+                for i in range(0, len(vids), step)
+            ], dim=0)
+        raise ValueError(f"mode must be 'frames' or 'native', got {mode!r}")
+
+    def _embed_video_batch(self, videos, nframes, fps, max_pixels):
+        """One batched forward pass over a list of videos (native mode) -> [N, 384]."""
+        texts, video_inputs, sample_fps = [], [], []
+        for v in videos:
+            ele = {"type": "video", "video": v}
+            if isinstance(v, str):
+                ele.update({"fps": fps} if fps else {"nframes": nframes})
+            else:
+                ele["video"] = self._sample_frames(v, nframes)
+            if max_pixels:
+                ele["max_pixels"] = max_pixels
+            messages = [{"role": "user", "content": [ele, {"type": "text", "text": "<|query|>"}]}]
+            texts.append(self.processor.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True
+            ))
+            _, vid, vkw = process_vision_info(messages, return_video_kwargs=True)
+            video_inputs.extend(vid)
+            sample_fps.extend(vkw.get("fps", []))
+
+        inputs = self.processor(
+            text=texts,
+            videos=video_inputs,
+            fps=sample_fps,
+            do_sample_frames=False,
+            padding=True,
+            return_tensors="pt",
+        )
+        inputs = {k: v.to(self.device) if isinstance(v, torch.Tensor) else v for k, v in inputs.items()}
+
+        with torch.no_grad():
+            embeddings = self.base_model(**inputs)
+            embeddings = F.normalize(embeddings.float(), dim=-1)
+        return embeddings
+
     def __call__(self, img1, img2):
         """
         Compute perceptual similarity between two preprocessed images.

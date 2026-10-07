@@ -100,6 +100,20 @@ embs = model.embed(preprocess(images), max_image_size=448, micro_batch_size=32)
 
 RelSim is image-only — there is no text-embedding counterpart to CLIP's `get_text_features`.
 
+**Video (experimental, zero-shot).** `embed_video` takes a video path, a list of PIL frames, or a list of those, and returns `[N, 384]` embeddings in the same space as `embed`:
+
+```python
+# "frames" (default): embed sampled frames as images, then mean-pool. Safe, but ignores temporal order.
+v = model.embed_video(["clip_a.mp4", "clip_b.mp4"], mode="frames", nframes=8)
+
+# "native": feed the clip to Qwen2.5-VL as a video. Can see motion, but the LoRA was trained on images only.
+v = model.embed_video(["clip_a.mp4", "clip_b.mp4"], mode="native", nframes=8, max_pixels=360 * 420)
+
+print(v[0] @ v[1])  # relational similarity between the two clips
+```
+
+See [README_VIDEO.md](README_VIDEO.md) for modes, recipes (retrieval, image↔video, long clips), memory tips and limitations.
+
 Or you can run [`python test.py`](test.py) for a quick test. Here is example results. All below images can be found in [this folder](./anonymous_caption/):
 | reference image | test image 1  | test image 2 | test image 3 | test image 4 | test image 5 | test image 6 |
 |--------------|-----------------|------------|------------|------------|------------|------------|
